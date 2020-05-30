@@ -331,6 +331,12 @@ RUN wget https://dl.google.com/cloudsql/cloud_sql_proxy.linux.amd64 \
 
 RUN apt update && apt install -y dnsutils && apt clean && rm -rf /var/lib/apt/lists/*
 
+RUN wget https://curl.haxx.se/download/curl-7.70.0.tar.gz
+RUN tar zxvf curl-7.70.0.tar.gz
+RUN cd curl-7.70.0 && ./configure --with-ca-path=/etc/ssl/certs && make -j 2 && sudo make install 
+RUN sudo ldconfig
+RUN sudo cp /usr/local/lib/libcurl.so /usr/lib/x86_64-linux-gnu/libcurl-gnutls.so.4
+
 user dark
 
 
