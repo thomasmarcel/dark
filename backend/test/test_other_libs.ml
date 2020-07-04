@@ -680,6 +680,14 @@ let t_list_stdlibs_work () =
     (exec_ast (fn "List::getAt" [list [int 1; int 2; int 3; int 4]; int 4]))
     (DOption OptNothing) ;
   check_dval
+    "List::isEmpty works (empty)"
+    (exec_ast (fn "List::isEmpty" [list []]))
+    (DBool true) ;
+  check_dval
+    "List::isEmpty works (not empty)"
+    (exec_ast (fn "List::isEmpty" [list [int 1]]))
+    (DBool false) ;
+  check_dval
     "List::filter_v2 works (empty)"
     (DList [])
     (exec_ast (fn "List::filter_v2" [list []; lambda ["item"] (bool true)])) ;
@@ -2090,7 +2098,7 @@ let t_bool_stdlibs () =
  * - a basic happy-path works
  * - guards for returning non-int or invalid int (not in {-1,0,1}) error *)
 let t_liblist_sort_by_comparator_works () =
-  let dlist_of_intlist (is : int list) : expr dval =
+  let dlist_of_intlist (is : int list) : dval =
     is
     |> List.map ~f:(fun i -> Dint.of_int i |> DInt)
     |> DList

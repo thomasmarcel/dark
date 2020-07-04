@@ -14,6 +14,18 @@ if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
   exit 1
 fi
 
+if [ ! -v CI ]; then
+  # Sometimes these dirs leak out of the container, causing confusion and
+  # slowness
+  rm -Rf _build
+  rm -Rf _esy
+  rm -Rf .esy
+  rm -Rf node_modules
+  rm -Rf lib
+  rm -Rf stroller/target
+  rm -Rf queue-scheduler/target
+fi
+
 # --------------
 # Build image from clean start
 # --------------
@@ -71,15 +83,6 @@ else
   MOUNTS+=" --mount type=volume,src=dark_stroller_target,dst=/home/dark/app/stroller/target"
   MOUNTS+=" --mount type=volume,src=dark_queue_scheduler_target,dst=/home/dark/app/queue-scheduler/target"
   MOUNTS+=" --mount type=volume,src=dark_rust_cargo,dst=/home/dark/.cargo"
-
-  # Sometimes these dirs leak out of the container, causing confusion and slowness
-  rm -Rf _build
-  rm -Rf _esy
-  rm -Rf .esy
-  rm -Rf node_modules
-  rm -Rf lib
-  rm -Rf stroller/target
-  rm -Rf queue-scheduler/target
 
   if [[ -e "$HOME/.config/gcloud" ]]; then
     MOUNTS="$MOUNTS --mount type=bind,src=$HOME/.config/gcloud,dst=/home/dark/.config/gcloud"
@@ -166,6 +169,8 @@ echo "Run the build"
 # docker, and
 # https://docs.docker.com/engine/reference/run/#specify-an-init-process
 # for documentation of --init.
+# -p 5433:5432 to expose the postgres DB to outside the container
+# -p 2345:2345 to expose the cloud_sql_proxy to outside the container
 $FSWATCH | docker run \
              --init \
              --rm \
@@ -186,6 +191,8 @@ $FSWATCH | docker run \
              -v pgdata:/var/lib/postgresql \
              -v /var/run/docker.sock:/var/run/docker.sock \
              -p 8000:8000 \
+             -p 5433:5432 \
+             -p 2345:2345 \
              --security-opt seccomp=scripts/support/chrome-seccomp.json \
              -w /home/dark/app \
              $MOUNTS \

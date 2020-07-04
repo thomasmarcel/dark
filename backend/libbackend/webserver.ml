@@ -51,7 +51,7 @@ let time (name : string) (fn : _ -> 'a) : timing_header * 'a =
   ((name, (finish -. start) *. 1000.0, name), result)
 
 
-let get_ip_address ch : string =
+let get_ip_address (ch : Conduit_lwt_unix.flow) : string =
   match Conduit_lwt_unix.endp_of_flow ch with
   | `TCP (ip, port) ->
       Ipaddr.to_string ip
@@ -321,8 +321,8 @@ let infer_cors_header
       Some "null"
 
 
-let options_handler
-    ~(execution_id : Types.id) (c : 'expr_type C.canvas) (req : CRequest.t) =
+let options_handler ~(execution_id : Types.id) (c : C.canvas) (req : CRequest.t)
+    =
   (* When javascript in a browser tries to make an unusual cross-origin
      request (for example, a POST with a weird content-type or something with
      weird headers), the browser first makes an OPTIONS request to the
@@ -365,10 +365,10 @@ let options_handler
 
 
 let result_to_response
-    ~(c : RTT.expr Canvas.canvas ref)
+    ~(c : Canvas.canvas ref)
     ~(execution_id : Types.id)
     ~(req : CRequest.t)
-    (result : RTT.expr RTT.dval) =
+    (result : RTT.dval) =
   let maybe_infer_cors headers =
     (* Add the Access-Control-ALlow-Origin, if it doens't exist
        and if infer_cors_header tells us to. *)
@@ -452,7 +452,7 @@ let user_page_handler
     ~(ip : string)
     ~(uri : Uri.t)
     ~(body : string)
-    (req : CRequest.t) =
+    (req : CRequest.t) : response_or_redirect_params =
   let verb = req |> CRequest.meth |> Cohttp.Code.string_of_method in
   let headers = req |> CRequest.headers |> Header.to_list in
   let query = req |> CRequest.uri |> Uri.query in
@@ -548,10 +548,7 @@ let user_page_handler
           | _ ->
               () ) ;
           let bound =
-            let page = Libexecution.Toplevel.handler_to_fluid page in
             Libexecution.Execution.http_route_input_vars page (Uri.path uri)
-            |> List.map ~f:(fun (a, b) ->
-                   (a, Libexecution.Fluid.dval_of_fluid b))
           in
           let result, touched_tlids =
             Libexecution.Execution.execute_handler
@@ -565,24 +562,11 @@ let user_page_handler
               ~secrets:(Secret.secrets_in_canvas !c.id)
               ~tlid:page.tlid
               ~dbs:(TL.dbs !c.dbs)
-              ~input_vars:
-                ( [ ( "request"
-                    , PReq.to_dval input |> Libexecution.Fluid.dval_of_fluid )
-                  ]
-                @ bound )
-              ~store_fn_arguments:(fun tlid dvalmap ->
-                Stored_function_arguments.store
-                  ~canvas_id
-                  ~trace_id
-                  tlid
-                  (Libexecution.Fluid.dval_map_to_fluid dvalmap))
-              ~store_fn_result:(fun funcdesc args result ->
-                Stored_function_result.store
-                  ~canvas_id
-                  ~trace_id
-                  funcdesc
-                  (List.map ~f:Libexecution.Fluid.dval_to_fluid args)
-                  (Libexecution.Fluid.dval_to_fluid result))
+              ~input_vars:([("request", PReq.to_dval input)] @ bound)
+              ~store_fn_arguments:
+                (Stored_function_arguments.store ~canvas_id ~trace_id)
+              ~store_fn_result:
+                (Stored_function_result.store ~canvas_id ~trace_id)
           in
           Stroller.push_new_trace_id
             ~execution_id
@@ -784,7 +768,7 @@ let admin_add_op_handler
           ( {params with ops = params.ops |> Op.filter_ops_received_out_of_order}
           , canvas_id ))
   in
-  let ops = params.ops |> Op.oplist_of_fluid in
+  let ops = params.ops in
   let tlids = List.map ~f:Op.tlidOf ops in
   let t2, maybe_c =
     (* NOTE: Because we run canvas-wide validation logic, it's important
@@ -798,7 +782,7 @@ let admin_add_op_handler
         | AllDatastores ->
             C.load_with_dbs ~tlids host ops)
   in
-  let params : Types.fluid_expr Api.add_op_rpc_params =
+  let params : Api.add_op_rpc_params =
     { ops = params.ops
     ; opCtr = params.opCtr
     ; clientOpCtrId = params.clientOpCtrId }
@@ -806,8 +790,7 @@ let admin_add_op_handler
   match maybe_c with
   | Ok c ->
       let t3, result =
-        time "3-to-frontend" (fun _ ->
-            !c |> Canvas.to_fluid |> Analysis.to_add_op_rpc_result)
+        time "3-to-frontend" (fun _ -> !c |> Analysis.to_add_op_rpc_result)
       in
       let t4, _ =
         time "4-save-to-disk" (fun _ ->
@@ -892,7 +875,6 @@ let fetch_all_traces
     let t1, c =
       time "1-load-canvas" (fun _ ->
           C.load_all_from_cache canvas
-          |> Result.map ~f:C.to_fluid_ref
           |> Result.map_error ~f:(String.concat ~sep:", ")
           |> Prelude.Result.ok_or_internal_exception "Failed to load canvas")
     in
@@ -940,7 +922,6 @@ let initial_load
       time "1-load-saved-ops" (fun _ ->
           let c =
             C.load_all_from_cache canvas
-            |> Result.map ~f:C.to_fluid_ref
             |> Result.map_error ~f:(String.concat ~sep:", ")
             |> Prelude.Result.ok_or_internal_exception "Failed to load canvas"
           in
@@ -1032,7 +1013,7 @@ let execute_function
           ~tlid:params.tlid
           ~trace_id:params.trace_id
           ~caller_id:params.caller_id
-          ~args:(List.map ~f:Libexecution.Fluid.dval_of_fluid params.args))
+          ~args:params.args)
   in
   let t4, unlocked =
     time "4-analyze-unlocked-dbs" (fun _ ->
@@ -1045,7 +1026,7 @@ let execute_function
           Dval.current_hash_version
           tlids
           unlocked
-          (Libexecution.Fluid.dval_to_fluid result))
+          result)
   in
   respond
     ~execution_id
@@ -1061,7 +1042,6 @@ let get_404s ~(execution_id : Types.id) (parent : Span.t) (host : string) body :
     let t1, c =
       time "1-load-saved-ops" (fun _ ->
           C.load_all_from_cache host
-          |> Result.map ~f:C.to_fluid_ref
           |> Result.map_error ~f:(String.concat ~sep:", ")
           |> Prelude.Result.ok_or_internal_exception "Failed to load canvas")
     in
@@ -1158,12 +1138,7 @@ let trigger_handler
                 handler
                 ~execution_id
                 ~tlid:params.tlid
-                ~input_vars:
-                  (List.map
-                     params.input
-                     ~f:
-                       (Tc.Tuple2.map_second
-                          ~f:Libexecution.Fluid.dval_of_fluid))
+                ~input_vars:params.input
                 ~dbs:(TL.dbs !c.dbs)
                 ~user_tipes:(!c.user_tipes |> Map.data)
                 ~user_fns:(!c.user_functions |> Map.data)
@@ -1171,19 +1146,10 @@ let trigger_handler
                 ~secrets:(Secret.secrets_in_canvas !c.id)
                 ~account_id:!c.owner
                 ~canvas_id
-                ~store_fn_arguments:(fun tlid dvalmap ->
-                  Stored_function_arguments.store
-                    ~canvas_id
-                    ~trace_id
-                    tlid
-                    (Libexecution.Fluid.dval_map_to_fluid dvalmap))
-                ~store_fn_result:(fun funcdesc args result ->
-                  Stored_function_result.store
-                    ~canvas_id
-                    ~trace_id
-                    funcdesc
-                    (List.map ~f:Libexecution.Fluid.dval_to_fluid args)
-                    (Libexecution.Fluid.dval_to_fluid result))
+                ~store_fn_arguments:
+                  (Stored_function_arguments.store ~canvas_id ~trace_id)
+                ~store_fn_result:
+                  (Stored_function_result.store ~canvas_id ~trace_id)
             in
             touched_tlids)
   in
@@ -1210,7 +1176,6 @@ let get_trace_data
   let t2, c =
     time "2-load-saved-ops" (fun _ ->
         C.load_tlids_from_cache ~tlids:[params.tlid] host
-        |> Result.map ~f:C.to_fluid_ref
         |> Result.map_error ~f:(String.concat ~sep:", "))
   in
   let t3, mht =
@@ -1273,7 +1238,6 @@ let db_stats
     let t2, c =
       time "2-load-saved-ops" (fun _ ->
           C.load_all_dbs_from_cache host
-          |> Result.map ~f:C.to_fluid_ref
           |> Result.map_error ~f:(String.concat ~sep:", ")
           |> Prelude.Result.ok_or_internal_exception "Failed to load canvas")
     in
@@ -2158,7 +2122,11 @@ let stroller_readiness_check () : string option Lwt.t =
       Lwt.return (Some ("Stroller.status = `Unhealthy: " ^ s))
 
 
-let k8s_handler (parent : Span.t) req ~execution_id ~stopper =
+let k8s_handler
+    (parent : Span.t)
+    (req : CRequest.t)
+    ~(execution_id : Types.id)
+    ~(stopper : unit Lwt.u) : (CResponse.t * Cl.Body.t) Lwt.t =
   let%lwt stroller_readiness_check = stroller_readiness_check () in
   match req |> CRequest.uri |> Uri.path with
   (* For GKE health check *)
@@ -2243,7 +2211,7 @@ let canvas_handler
     ~(uri : Uri.t)
     ~(body : string)
     (parent : Span.t)
-    (req : CRequest.t) =
+    (req : CRequest.t) : (Cohttp.Response.t * Cl.Body.t) Lwt.t =
   let verb = req |> CRequest.meth in
   (* TODO make sure this resolves before returning *)
   let%lwt resp, body =
@@ -2287,7 +2255,13 @@ let canvas_handler
   Lwt.return (resp, body)
 
 
-let callback ~k8s_callback (parent : Span.t) ip req body execution_id =
+let callback
+    ~k8s_callback
+    (parent : Span.t)
+    (ip : string)
+    (req : CRequest.t)
+    (body : string)
+    (execution_id : Types.id) : (CResponse.t * Cl.Body.t) Lwt.t =
   let req = canonicalize_request req in
   let uri = CRequest.uri req in
   let handle_error ~(include_internals : bool) (e : exn) =
@@ -2399,8 +2373,9 @@ let callback ~k8s_callback (parent : Span.t) ip req body execution_id =
 
 let server () =
   let stop, stopper = Lwt.wait () in
-  let cbwb conn req req_body =
-    let%lwt body_string = Cohttp_lwt__Body.to_string req_body in
+  let cbwb (conn : S.conn) (req : CRequest.t) (req_body : Cl.Body.t) :
+      (CResponse.t * Cl.Body.t) Lwt.t =
+    let%lwt body_string = Cl.Body.to_string req_body in
     let execution_id = Util.create_id () in
     let uri = CRequest.uri req in
     (* use the x-forwarded-for ip, falling back to the raw ip in the request *)
